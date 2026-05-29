@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Professional Messaging Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: flex; gap: 1.5rem; padding: 1rem; }
+    .panel { border: 1px solid #aaa; border-radius: 8px; padding: 1rem; flex: 1; min-width: 380px; }
+    .messages { height: 220px; overflow-y: auto; border: 1px solid #ddd; background: #f9f9f9; margin: 0.5rem 0; padding: 0.3rem; }
+    .log { font-size: 0.9em; margin: 3px 0; word-break: break-word; }
+    .log img { max-width: 150px; max-height: 120px; display: block; margin: 4px 0; }
+    .section { margin: 8px 0; }
+    select, input, button { margin: 2px; }
+    .group-code { font-family: monospace; background: #eee; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="panel" id="panel-alice">
+    <h2>Alice</h2>
+    <div class="section">
+      <input id="alice-uid" value="alice" size="12" placeholder="Your ID">
+      <button onclick="connect('alice')">Connect</button>
+    </div>
+    <div class="section">
+      <strong>Direct</strong>:
+      <input id="alice-to" value="bob" size="8" placeholder="To">
+      <input id="alice-msg" placeholder="Message">
+      <button onclick="sendDirectChat('alice')">Send</button>
+      <input type="file" id="alice-file">
+      <button onclick="sendDirectFile('alice')">Send File</button>
+    </div>
+    <div class="section">
+      <strong>Groups</strong>:
+      <button onclick="createGroup('alice')">Create Group</button>
+      <span id="alice-group-id" class="group-code"></span>
+      <br>
+      <input id="alice-join-code" placeholder="Group ID" size="8">
+      <button onclick="joinGroup('alice')">Join</button>
+      <br>
+      <select id="alice-group-select"></select>
+      <button onclick="leaveGroup('alice')">Leave</button>
+      <br>
+      <input id="alice-group-msg" placeholder="Group message">
+      <button onclick="sendGroupMessage('alice')">Send</button>
+      <input type="file" id="alice-group-file">
+      <button onclick="sendGroupFile('alice')">Send File</button>
+    </div>
+    <div class="messages" id="alice-msgs"></div>
+  </div>
+
+  <div class="panel" id="panel-bob">
+    <h2>Bob</h2>
+    <div class="section">
+      <input id="bob-uid" value="bob" size="12" placeholder="Your ID">
+      <button onclick="connect('bob')">Connect</button>
+    </div>
+    <div class="section">
+      <strong>Direct</strong>:
+      <input id="bob-to" value="alice" size="8" placeholder="To">
+      <input id="bob-msg" placeholder="Message">
+      <button onclick="sendDirectChat('bob')">Send</button>
+      <input type="file" id="bob-file">
+      <button onclick="sendDirectFile('bob')">Send File</button>
+    </div>
+    <div class="section">
+      <strong>Groups</strong>:
+      <button onclick="createGroup('bob')">Create Group</button>
+      <span id="bob-group-id" class="group-code"></span>
+      <br>
+      <input id="bob-join-code" placeholder="Group ID" size="8">
+      <button onclick="joinGroup('bob')">Join</button>
+      <br>
+      <select id="bob-group-select"></select>
+      <button onclick="leaveGroup('bob')">Leave</button>
+      <br>
+      <input id="bob-group-msg" placeholder="Group message">
+      <button onclick="sendGroupMessage('bob')">Send</button>
+      <input type="file" id="bob-group-file">
+      <button onclick="sendGroupFile('bob')">Send File</button>
+    </div>
+    <div class="messages" id="bob-msgs"></div>
+  </div>
+
+  <script>
+    const state = {
+      alice: { ws: null, userId: null, groups: [] }, // groups: [{id, name}]
+      bob:   { ws: null, userId: null, groups: [] }
+    };
+
+    function log(user, html) {
+      const div = document.getElementById(`${user}-msgs`);
+      const entry = document.createElement('div');
+      entry.className = 'log';
+      if (typeof html === 'string') entry.innerHTML = html;
+      else entry.appendChild(html);
+      div.appendChild(entry);
+      div.scrollTop = div.scrollHeight;
+    }
+
+    function updateGroupSelect(user) {
+      const sel = document.getElementById(`${user}-group-select`);
+      sel.innerHTML = '<option value="">-- select group --</option>';
+      state[user].groups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = `${g.name} (${g.id})`;
+        sel.appendChild(opt);
+      });
+    }
+
+    function connect(user) {
+      if (state[user].ws) state[user].ws.close();
+      const uid = document.getElementById(`${user}-uid`).value.trim();
+      if (!uid) return alert('Enter a User ID');
+
+      const ws = new WebSocket('ws://localhost:3000');
+      state[user].ws = ws;
+      state[user].userId = uid;
+
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'register', userId: uid }));
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        handleMessage(user, msg);
+      };
+      ws.onclose = () => log(user, '🔴 Disconnected');
+    }
+
+    function handleMessage(user, msg) {
+      switch (msg.type) {
+        case 'registered':
+          log(user, `✅ Registered as <b>${msg.userId}</b>`);
+          break;
+        case 'error':
+          log(user, `❌ Error: ${msg.message}`);
+          break;
+        case 'chat':
+          log(user, `<b>${esc(msg.from)}</b>: ${esc(msg.content)}`);
+          break;
+        case 'file':
+          handleFile(user, msg);
+          break;
+        case 'group-created':
+          state[user].groups.push({ id: msg.groupId, name: msg.groupName });
+          updateGroupSelect(user);
+          document.getElementById(`${user}-group-id`).textContent = msg.groupId;
+          log(user, `🏷️ Group created: <b>${msg.groupName}</b> (ID: <span class="group-code">${msg.groupId}</span>)`);
+          break;
+        case 'group-joined':
+          state[user].groups.push({ id: msg.groupId, name: msg.groupName });
+          updateGroupSelect(user);
+          log(user, `👥 Joined group <b>${msg.groupName}</b> (${msg.groupId})`);
+          break;
+        case 'group-left':
+          state[user].groups = state[user].groups.filter(g => g.id !== msg.groupId);
+          updateGroupSelect(user);
+          log(user, `🚪 Left group ${msg.groupId}`);
+          break;
+        case 'group-notification':
+          log(user, `📢 [${msg.groupId}] ${msg.message}`);
+          break;
+        case 'group-message':
+          log(user, `💬 [${msg.groupId}] <b>${esc(msg.from)}</b>: ${esc(msg.content)}`);
+          break;
+        case 'group-file':
+          handleGroupFile(user, msg);
+          break;
+        default:
+          log(user, `⚠️ Unknown: ${msg.type}`);
+      }
+    }
+
+    function handleFile(user, msg) {
+      const { from, filename, mimeType, data } = msg;
+      const container = document.createElement('div');
+      container.innerHTML = `<b>${esc(from)}</b> sent <i>${esc(filename)}</i>`;
+      if (mimeType && mimeType.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.src = data;
+        container.appendChild(img);
+      }
+      const link = document.createElement('a');
+      link.href = data;
+      link.download = filename;
+      link.textContent = `⬇️ Download`;
+      link.style.marginLeft = '6px';
+      container.appendChild(link);
+      log(user, container);
+    }
+
+    function handleGroupFile(user, msg) {
+      const { groupId, from, filename, mimeType, data } = msg;
+      const container = document.createElement('div');
+      container.innerHTML = `📎 [${groupId}] <b>${esc(from)}</b> shared <i>${esc(filename)}</i>`;
+      if (mimeType && mimeType.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.src = data;
+        container.appendChild(img);
+      }
+      const link = document.createElement('a');
+      link.href = data;
+      link.download = filename;
+      link.textContent = `⬇️ Download`;
+      link.style.marginLeft = '6px';
+      container.appendChild(link);
+      log(user, container);
+    }
+
+    function sendDirectChat(user) {
+      const ws = state[user].ws;
+      if (!ws) return alert('Connect first');
+      const to = document.getElementById(`${user}-to`).value.trim();
+      const content = document.getElementById(`${user}-msg`).value.trim();
+      if (!to || !content) return;
+      ws.send(JSON.stringify({ type: 'chat', to, content }));
+      log(user, `<b>You → ${esc(to)}</b>: ${esc(content)}`);
+      document.getElementById(`${user}-msg`).value = '';
+    }
+
+    function sendDirectFile(user) {
+      const ws = state[user].ws;
+      if (!ws) return alert('Connect first');
+      const to = document.getElementById(`${user}-to`).value.trim();
+      const fileInput = document.getElementById(`${user}-file`);
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        ws.send(JSON.stringify({
+          type: 'file',
+          to,
+          filename: file.name,
+          mimeType: file.type,
+          data: reader.result
+        }));
+        log(user, `<b>You → ${esc(to)}</b>: 📎 Sent <i>${esc(file.name)}</i>`);
+        fileInput.value = '';
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function createGroup(user) {
+      const ws = state[user].ws;
+      if (!ws) return alert('Connect first');
+      const groupName = prompt('Group name?', 'My Group');
+      if (!groupName) return;
+      ws.send(JSON.stringify({ type: 'create-group', groupName }));
+    }
+
+    function joinGroup(user) {
+      const ws = state[user].ws;
+      if (!ws) return alert('Connect first');
+      const code = document.getElementById(`${user}-join-code`).value.trim();
+      if (!code) return;
+      ws.send(JSON.stringify({ type: 'join-group', groupId: code }));
+      document.getElementById(`${user}-join-code`).value = '';
+    }
+
+    function leaveGroup(user) {
+      const ws = state[user].ws;
+      if (!ws) return alert('Connect first');
+      const sel = document.getElementById(`${user}-group-select`);
+      const groupId = sel.value;
+      if (!groupId) return;
+      ws.send(JSON.stringify({ type: 'leave-group', groupId }));
+    }
+
+    function sendGroupMessage(user) {
+      const ws = state[user].ws;
+      if (!ws) return alert('Connect first');
+      const sel = document.getElementById(`${user}-group-select`);
+      const groupId = sel.value;
+      if (!groupId) return alert('Select a group');
+      const content = document.getElementById(`${user}-group-msg`).value.trim();
+      if (!content) return;
+      ws.send(JSON.stringify({ type: 'group-message', groupId, content }));
+      log(user, `<b>You → group ${groupId}</b>: ${esc(content)}`);
+      document.getElementById(`${user}-group-msg`).value = '';
+    }
+
+    function sendGroupFile(user) {
+      const ws = state[user].ws;
+      if (!ws) return alert('Connect first');
+      const sel = document.getElementById(`${user}-group-select`);
+      const groupId = sel.value;
+      if (!groupId) return alert('Select a group');
+      const fileInput = document.getElementById(`${user}-group-file`);
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        ws.send(JSON.stringify({
+          type: 'group-file',
+          groupId,
+          filename: file.name,
+          mimeType: file.type,
+          data: reader.result
+        }));
+        log(user, `<b>You → group ${groupId}</b>: 📎 Sent <i>${esc(file.name)}</i>`);
+        fileInput.value = '';
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function esc(str) {
+      return String(str).replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+      }[m]));
+    }
+  </script>
+</body>
+</html>
