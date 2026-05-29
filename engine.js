@@ -9,6 +9,7 @@ class MessagingEngine {
     this.server = null;
     this.wss = null;
     this.users = new Map();         // userId -> WebSocket
+    this.userNames = new Map();     // userId -> display name
     this.groups = new Map();        // groupId -> { id, name, members: Set<userId> }
   }
 
@@ -36,9 +37,11 @@ class MessagingEngine {
           }
 
           userId = msg.userId;
+          const userName = msg.name || userId;   // use provided name or fallback to userId
           this.users.set(userId, ws);
-          ws.send(JSON.stringify({ type: 'registered', userId }));
-          console.log(`User connected: ${userId}`);
+          this.userNames.set(userId, userName);
+          ws.send(JSON.stringify({ type: 'registered', userId, userName }));
+          console.log(`User connected: ${userId} (${userName})`);
 
           // Now handle further messages
           ws.on('message', (data) => this.handleMessage(ws, userId, data));
@@ -50,6 +53,7 @@ class MessagingEngine {
       ws.on('close', () => {
         if (userId) {
           this.users.delete(userId);
+          this.userNames.delete(userId);
           // Remove user from all groups
           for (const [groupId, group] of this.groups) {
             group.members.delete(userId);
@@ -147,6 +151,15 @@ class MessagingEngine {
         break;
       case 'group-file':
         this.handleGroupFile(ws, userId, msg);
+        break;
+
+      // NEW: Return list of connected users with their names
+      case 'get-users':
+        const userList = [];
+        for (const [id, name] of this.userNames) {
+          userList.push({ userId: id, userName: name });
+        }
+        ws.send(JSON.stringify({ type: 'user-list', users: userList }));
         break;
 
       default:

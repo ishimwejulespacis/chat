@@ -113,7 +113,7 @@
       const uid = document.getElementById(`${user}-uid`).value.trim();
       if (!uid) return alert('Enter a User ID');
 
-      const ws = new WebSocket('ws://localhost:3000');
+      const ws = new WebSocket('wss://chat-production-b34f.up.railway.app/');
       state[user].ws = ws;
       state[user].userId = uid;
 
